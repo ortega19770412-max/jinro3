@@ -1,101 +1,85 @@
-# compose_neis_note_module.py
-from datetime import datetime
-from typing import List, Optional
+import os
+import json
+from http.server import HTTPServer, BaseHTTPRequestHandler
+# 선생님의 모듈을 불러옵니다
+from compose_neis_note_module import compose_neis_note
 
-# 기본 filler 문장들 (필요시 추가/수정)
-DEFAULT_FILLERS = [
-    "교육 활동의 목적과 과정을 충실히 수행하였으며 학생의 자기주도적 학습 태도가 돋보였음.",
-    "과제 해결 과정에서 책임감 있게 참여하였고 협력적 태도를 지속적으로 보였음.",
-    "수업 중 적극적으로 질문하고 토론에 참여하여 사고력과 표현력이 향상됨.",
-    "프로젝트 결과를 성실히 제출하였으며 피드백을 수용하는 태도가 우수함."
-]
+PORT = int(os.environ.get("PORT", 10000))
 
-def _format_date_obj(date_obj_or_str) -> str:
-    # date_obj_or_str이 datetime이면 포맷, 문자열이면 YYYY-MM-DD 또는 유사 포맷 처리 시도
-    if isinstance(date_obj_or_str, datetime):
-        return date_obj_or_str.strftime("%Y.%m.%d.")
-    if isinstance(date_obj_or_str, str):
-        s = date_obj_or_str.strip()
-        # 간단한 형태들 처리: 2020-05-01, 2020.05.01, 20200501 등
-        try:
-            if "-" in s:
-                dt = datetime.fromisoformat(s)
-                return dt.strftime("%Y.%m.%d.")
-            if "." in s:
-                parts = [p for p in s.split(".") if p]
-                if len(parts) >= 3:
-                    y,m,d = parts[:3]
-                    return f"{int(y):04d}.{int(m):02d}.{int(d):02d}."
-            if len(s) == 8 and s.isdigit():
-                dt = datetime.strptime(s, "%Y%m%d")
-                return dt.strftime("%Y.%m.%d.")
-        except Exception:
-            pass
-    # 포맷 불가 시 빈 문자열 반환
-    return ""
+# 웹 화면 (HTML/JS)
+HTML_UI = """
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>NEIS 기록 생성기</title>
+    <style>
+        body { font-family: sans-serif; padding: 20px; background: #f4f7f9; }
+        .box { background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); max-width: 600px; margin: auto; }
+        input, textarea, button { width: 100%; padding: 10px; margin: 10px 0; border: 1px solid #ddd; border-radius: 5px; box-sizing: border-box; }
+        button { background: #007bff; color: white; border: none; font-weight: bold; cursor: pointer; }
+        #output { background: #e9ecef; padding: 15px; border-radius: 5px; min-height: 100px; white-space: pre-wrap; margin-top: 10px; }
+    </style>
+</head>
+<body>
+    <div class="box">
+        <h2>📝 NEIS 기록 생성기</h2>
+        <input type="text" id="event_name" placeholder="활동명 (예: 진로캠프)">
+        <input type="date" id="event_date">
+        <textarea id="sentences" rows="5" placeholder="핵심 문장들을 입력하세요 (엔터로 구분)"></textarea>
+        <button onclick="generate()">기록 조합하기</button>
+        <div id="output">결과가 여기에 표시됩니다.</div>
+    </div>
 
-def compose_neis_note(
-    event_name: str,
-    date_obj,  # datetime or str
-    ranked_sentences: List[str],
-    bridge: str = "을 통해",
-    min_bytes: int = 150,
-    remove_spaces: bool = False,
-    fillers: Optional[List[str]] = None,
-) -> str:
-    """
-    NEIS 용 활동기록 문자열 생성.
-    출력 포맷 예시: EventName(2020.05.01.)을 통해[학생은 ... .]
-    - min_bytes: UTF-8 바이트 기준 최소 길이
-    - remove_spaces: True면 공백 제거(최적화용)
-    """
-    if fillers is None:
-        fillers = DEFAULT_FILLERS
+    <script>
+        async function generate() {
+            const out = document.getElementById('output');
+            out.innerText = "조합 중...";
+            
+            const data = {
+                event_name: document.getElementById('event_name').value,
+                date: document.getElementById('event_date').value,
+                sentences: document.getElementById('sentences').value.split('\\n')
+            };
 
-    date_str = _format_date_obj(date_obj) or ""
-    header = f"{event_name}({date_str}){bridge}["
-    closing = "]."
+            const res = await fetch('/api/compose', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(data)
+            });
+            const result = await res.json();
+            out.innerText = result.text;
+        }
+    </script>
+</body>
+</html>
+"""
 
-    # 랭크된 문장들을 연결 (기본적으로 전체 문장 연결하되 필요시 자름)
-    body_parts = []
-    for s in ranked_sentences:
-        s = s.strip()
-        if not s:
-            continue
-        # 문장 마침표 보장
-        if not s.endswith((".","다","함","음","임","니다")):
-            s = s + "."
-        body_parts.append(s)
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/html; charset=utf-8')
+        self.end_headers()
+        self.wfile.write(HTML_UI.encode('utf-8'))
 
-    # 초기 본문
-    body = " ".join(body_parts).strip()
-    # 빈 본문이면 최소한 한 filler 추가
-    if not body:
-        body = fillers[0]
+    def do_POST(self):
+        if self.path == '/api/compose':
+            content_length = int(self.headers['Content-Length'])
+            post_data = json.loads(self.rfile.read(content_length).decode())
+            
+            # 선생님의 모듈 함수 호출
+            result_text = compose_neis_note(
+                event_name=post_data['event_name'],
+                date_obj=post_data['date'],
+                ranked_sentences=post_data['sentences']
+            )
+            
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({"text": result_text}).encode())
 
-    candidate = header + body + closing
-
-    # 공백 제거 옵션이 설정되면 적용
-    if remove_spaces:
-        candidate = "".join(candidate.split())
-
-    # UTF-8 바이트 길이 계산
-    cur_bytes = len(candidate.encode("utf-8"))
-    fill_index = 0
-    # filler를 순환하면서 min_bytes 만족할 때까지 추가
-    while cur_bytes < min_bytes:
-        extra = fillers[fill_index % len(fillers)]
-        # 문장 구분을 위해 공백/구두점 처리
-        if not candidate.endswith((" ", "[")):
-            candidate = candidate[:-2] + " " + extra + closing if candidate.endswith("].") else candidate + " " + extra + closing
-        else:
-            candidate = candidate + extra + closing
-        if remove_spaces:
-            candidate = "".join(candidate.split())
-        cur_bytes = len(candidate.encode("utf-8"))
-        fill_index += 1
-        # 안전장치: 지나치게 많은 반복은 중단
-        if fill_index > 10:
-            break
-
-    return candidate
+if __name__ == "__main__":
+    server = HTTPServer(('', PORT), Handler)
+    print(f"Server started on {PORT}")
+    server.serve_forever()
